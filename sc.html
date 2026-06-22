@@ -2844,7 +2844,7 @@
                     currentMode = 'update-playlist-root';
                     setSelectionType('playlist-sc');
                     setVisibilityForMode(currentMode);
-                    await renderVideosInternal(false, sortSelector.value, true);
+                    await renderUpdatePlaylistRootMode(sortSelector.value);
                 } catch (err) {
                     if (err.name !== 'AbortError') {
                         console.error('Failed to open playlist or directory:', err);
@@ -2920,6 +2920,8 @@
                         renderLatestVideosMode(e.target.value);
                     } else if (currentMode === 'sc' || currentMode === 'root-sc') {
                         renderVideosInternal(false, e.target.value, true);
+                    } else if (currentMode === 'update-playlist-root') {
+                        renderUpdatePlaylistRootMode(e.target.value);
                     }
                 }
             });
@@ -5139,6 +5141,10 @@
             await renderVideosInternal(true, sortBy, false);
         }
 
+        async function renderUpdatePlaylistRootMode(sortBy = 'name-asc') {
+            await renderVideosInternal(false, sortBy, true);
+        }
+
         async function renderVideosInternal(isNewOnly = false, sortBy = 'name-asc', isShortcutsOnly = false) {
             console.log(`Starting renderVideosInternal (isNewOnly=${isNewOnly}, isShortcutsOnly=${isShortcutsOnly}, currentMode=${currentMode})`);
             if (currentMode === 'root-sc' || currentMode === 'update-playlist-root') {
@@ -5256,8 +5262,8 @@
                 rootScDataSets.set(key, val);
             }
 
-            let rootShortcutDates = new Map(); // For update-playlist-root mode
-            if (currentMode === 'update-playlist-root' && g_rootHandle) {
+            let rootShortcutDates = new Map();
+            if ((currentMode === 'update-playlist-root' || currentMode === 'playlist-root' || currentMode === 'root-sc') && g_rootHandle) {
                 try {
                     let scDir = null;
                     if (g_rootHandle.name.toLowerCase() === 'sc') {
@@ -5480,9 +5486,9 @@
                         
                         let hasRootSc = rootScEntry !== false;
 
-                        // In update-playlist-root mode, we ALSO check if the shortcut file exists directly in sc/
+                        // Check if the shortcut file exists directly in sc/ (especially for new shortcuts not yet in rootdata.txt)
                         let scDate = null;
-                        if (currentMode === 'update-playlist-root') {
+                        if (currentMode === 'update-playlist-root' || currentMode === 'playlist-root' || currentMode === 'root-sc') {
                             scDate = getShortcutDate(videoFile.name, rootShortcutDates);
                             if (scDate !== null) {
                                 hasRootSc = true;
@@ -5536,7 +5542,7 @@
                     const groupHeader = document.createElement('h2');
                     groupHeader.className = 'project-header';
                     const groupHeaderText = document.createElement('span');
-                    const projectPrefix = (currentMode === 'root-sc' || currentMode === 'sc') ? 'Root Shortcuts: ' : '';
+                    const projectPrefix = (currentMode === 'root-sc' || currentMode === 'sc' || currentMode === 'playlist-root' || currentMode === 'update-playlist-root') ? 'Root Shortcuts: ' : '';
                     groupHeaderText.textContent = `${projectPrefix}${project.name} (${projectRows.length} ${projectRows.length === 1 ? 'video' : 'videos'})`;
                     groupHeader.appendChild(groupHeaderText);
 
@@ -5625,11 +5631,16 @@
                         else if (isRoot) initialShortcutType = 'root-sc';
                         else if (isSub) initialShortcutType = 'subfolder-sc';
 
+                        if (currentMode === 'update-playlist-root') {
+                            initialShortcutType = 'playlist-sc';
+                        }
+
                         const key = project.path + '|' + videoFile.name;
                         const loadedEditState = editModeRotatedVideos.get(key);
                         
                         let selectionData = shortcutSelections.get(key);
-                        if (!selectionData && (initialShortcutType || rotation !== "0" || flipped || loadedEditState) && currentMode !== 'playlist-root' && currentMode !== 'update-playlist-root') {
+                        const isPlaylistMode = currentMode === 'playlist-root' || currentMode === 'update-playlist-root';
+                        if (!selectionData && (initialShortcutType || rotation !== "0" || flipped || loadedEditState) && (!isPlaylistMode || initialShortcutType === 'playlist-sc')) {
                             selectionData = { 
                                 videoName: videoFile.name, projectPath: project.path, subfolder: videoFile.subfolder,
                                 projectName: project.name,
@@ -5666,7 +5677,8 @@
                             const img = new Image();
                             img.className = 'thumbnail';
                             img.dataset.fileName = file.name;
-                            if (initialShortcutType && currentMode !== 'playlist-root' && currentMode !== 'update-playlist-root') {
+                            const isPlaylistRootMode = currentMode === 'playlist-root' || currentMode === 'update-playlist-root';
+                            if (initialShortcutType && (!isPlaylistRootMode || initialShortcutType === 'playlist-sc')) {
                                 img.classList.add('selected-' + initialShortcutType);
                                 wrapper.classList.add('selected-' + initialShortcutType);
                             }
