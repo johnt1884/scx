@@ -5068,17 +5068,20 @@
         }
 
         function checkShortcut(videoName, scDataSet) {
-            const baseName = videoName.substring(0, videoName.lastIndexOf('.'));
+            const lastDotIndex = videoName.lastIndexOf('.');
+            const baseName = lastDotIndex !== -1 ? videoName.substring(0, lastDotIndex) : videoName;
             const namesToCheck = [
                 videoName.toLowerCase() + ".lnk",
                 videoName.toLowerCase() + ".ink",
                 videoName.toLowerCase() + " - shortcut.lnk",
+                videoName.toLowerCase() + " - shortcut.ink",
                 videoName.toLowerCase()
             ];
-            if (baseName) {
+            if (baseName !== videoName) {
                 namesToCheck.push(baseName.toLowerCase() + ".lnk");
                 namesToCheck.push(baseName.toLowerCase() + ".ink");
                 namesToCheck.push(baseName.toLowerCase() + " - shortcut.lnk");
+                namesToCheck.push(baseName.toLowerCase() + " - shortcut.ink");
                 namesToCheck.push(baseName.toLowerCase());
             }
             if (scDataSet instanceof Set) {
@@ -5092,17 +5095,20 @@
         }
 
         function getShortcutDate(videoName, dateMap) {
-            const baseName = videoName.substring(0, videoName.lastIndexOf('.'));
+            const lastDotIndex = videoName.lastIndexOf('.');
+            const baseName = lastDotIndex !== -1 ? videoName.substring(0, lastDotIndex) : videoName;
             const namesToCheck = [
                 videoName.toLowerCase() + ".lnk",
                 videoName.toLowerCase() + ".ink",
                 videoName.toLowerCase() + " - shortcut.lnk",
+                videoName.toLowerCase() + " - shortcut.ink",
                 videoName.toLowerCase()
             ];
-            if (baseName) {
+            if (baseName !== videoName) {
                 namesToCheck.push(baseName.toLowerCase() + ".lnk");
                 namesToCheck.push(baseName.toLowerCase() + ".ink");
                 namesToCheck.push(baseName.toLowerCase() + " - shortcut.lnk");
+                namesToCheck.push(baseName.toLowerCase() + " - shortcut.ink");
                 namesToCheck.push(baseName.toLowerCase());
             }
             for (const n of namesToCheck) {
@@ -5280,11 +5286,24 @@
 
                     if (scDir) {
                         for await (const entry of scDir.values()) {
-                        if (entry.kind === 'file') {
-                            const file = await entry.getFile();
-                            rootShortcutDates.set(entry.name.toLowerCase(), file.lastModified);
+                            if (entry.kind === 'file') {
+                                const file = await entry.getFile();
+                                rootShortcutDates.set(entry.name.toLowerCase(), file.lastModified);
+                            } else if (entry.kind === 'directory') {
+                                // Recursively scan subfolders for shortcuts
+                                async function scanSubSc(dir, prefix = '') {
+                                    for await (const subEntry of dir.values()) {
+                                        if (subEntry.kind === 'file') {
+                                            const subFile = await subEntry.getFile();
+                                            rootShortcutDates.set(subEntry.name.toLowerCase(), subFile.lastModified);
+                                        } else if (subEntry.kind === 'directory') {
+                                            await scanSubSc(subEntry);
+                                        }
+                                    }
+                                }
+                                await scanSubSc(entry);
+                            }
                         }
-                    }
                         console.log(`Loaded ${rootShortcutDates.size} shortcut dates for filtering.`);
                     } else {
                         console.warn("'sc' directory not found in the selected root.");
@@ -5507,7 +5526,7 @@
                                     continue;
                                 }
                                 const effectiveDate = scDate || videoFile.lastModified;
-                                if (playlistCreationTime && effectiveDate <= (playlistCreationTime + 1000)) {
+                                if (playlistCreationTime && effectiveDate <= playlistCreationTime) {
                                     loadErrors.push({ project: project.path, video: videoFile.name, reason: "Shortcut date before playlist cutoff" });
                                     continue;
                                 }
