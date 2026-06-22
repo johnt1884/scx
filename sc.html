@@ -5067,27 +5067,35 @@
             }
         }
 
-        function checkShortcut(videoName, scDataSet) {
+        function getPotentialShortcutNames(videoName) {
+            const names = new Set();
+            const lowerName = videoName.toLowerCase();
             const lastDotIndex = videoName.lastIndexOf('.');
             const baseName = lastDotIndex !== -1 ? videoName.substring(0, lastDotIndex) : videoName;
-            const namesToCheck = [
-                videoName.toLowerCase() + ".lnk",
-                videoName.toLowerCase() + ".ink",
-                videoName.toLowerCase() + " - shortcut.lnk",
-                videoName.toLowerCase() + " - shortcut.ink",
-                videoName.toLowerCase() + ".mp4.lnk",
-                videoName.toLowerCase() + ".mp4.ink",
-                videoName.toLowerCase()
-            ];
-            if (baseName !== videoName) {
-                namesToCheck.push(baseName.toLowerCase() + ".lnk");
-                namesToCheck.push(baseName.toLowerCase() + ".ink");
-                namesToCheck.push(baseName.toLowerCase() + " - shortcut.lnk");
-                namesToCheck.push(baseName.toLowerCase() + " - shortcut.ink");
-                namesToCheck.push(baseName.toLowerCase() + ".mp4.lnk");
-                namesToCheck.push(baseName.toLowerCase() + ".mp4.ink");
-                namesToCheck.push(baseName.toLowerCase());
-            }
+            const lowerBase = baseName.toLowerCase();
+
+            const suffixes = [".lnk", ".ink", " - shortcut.lnk", " - shortcut.ink", " - shortcut", ""];
+            const extensions = [".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v", ".mpg", ".mpeg", ""];
+
+            // Try combinations with and without original extension, and with various shortcut suffixes
+            [lowerName, lowerBase].forEach(name => {
+                if (!name) return;
+                suffixes.forEach(s => {
+                    names.add(name + s);
+                    // Also try specifically adding common video extensions if they weren't there
+                    extensions.forEach(ext => {
+                        if (ext && !name.endsWith(ext)) {
+                            names.add(name + ext + s);
+                        }
+                    });
+                });
+            });
+
+            return Array.from(names);
+        }
+
+        function checkShortcut(videoName, scDataSet) {
+            const namesToCheck = getPotentialShortcutNames(videoName);
             if (scDataSet instanceof Set) {
                 return namesToCheck.some(n => scDataSet.has(n));
             } else if (scDataSet instanceof Map) {
@@ -5099,30 +5107,17 @@
         }
 
         function getShortcutDate(videoName, dateMap) {
-            const lastDotIndex = videoName.lastIndexOf('.');
-            const baseName = lastDotIndex !== -1 ? videoName.substring(0, lastDotIndex) : videoName;
-            const namesToCheck = [
-                videoName.toLowerCase() + ".lnk",
-                videoName.toLowerCase() + ".ink",
-                videoName.toLowerCase() + " - shortcut.lnk",
-                videoName.toLowerCase() + " - shortcut.ink",
-                videoName.toLowerCase() + ".mp4.lnk",
-                videoName.toLowerCase() + ".mp4.ink",
-                videoName.toLowerCase()
-            ];
-            if (baseName !== videoName) {
-                namesToCheck.push(baseName.toLowerCase() + ".lnk");
-                namesToCheck.push(baseName.toLowerCase() + ".ink");
-                namesToCheck.push(baseName.toLowerCase() + " - shortcut.lnk");
-                namesToCheck.push(baseName.toLowerCase() + " - shortcut.ink");
-                namesToCheck.push(baseName.toLowerCase() + ".mp4.lnk");
-                namesToCheck.push(baseName.toLowerCase() + ".mp4.ink");
-                namesToCheck.push(baseName.toLowerCase());
-            }
+            const namesToCheck = getPotentialShortcutNames(videoName);
+            let latestDate = null;
             for (const n of namesToCheck) {
-                if (dateMap.has(n)) return dateMap.get(n);
+                const d = dateMap.get(n);
+                if (d !== undefined && d !== null) {
+                    if (latestDate === null || d > latestDate) {
+                        latestDate = d;
+                    }
+                }
             }
-            return null;
+            return latestDate;
         }
 
         // Function to safely read and parse scdate.txt
@@ -5187,6 +5182,16 @@
                     await findDirectoryHandleByName(dirHandle, 'Edit Thumbnails');
                     isProject = true;
                 } catch (e) {}
+
+                // Treat as a project if it has video files directly, even if no Edit Thumbnails folder
+                if (!isProject && findProjects) {
+                    for await (const entry of dirHandle.values()) {
+                        if (entry.kind === 'file' && entry.name.match(/\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|mpg|mpeg)$/i)) {
+                            isProject = true;
+                            break;
+                        }
+                    }
+                }
 
                 const folderInfo = {
                     handle: dirHandle,
@@ -5419,7 +5424,7 @@
                     // Recursively find videos in subfolders
                     async function findVideos(dirHandle, subfolder = '') {
                         for await (const entry of dirHandle.values()) {
-                            if (entry.kind === 'file' && entry.name.match(/\.(mp4|avi|mov|mkv)$/i)) {
+                            if (entry.kind === 'file' && entry.name.match(/\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|mpg|mpeg)$/i)) {
                                 try {
                                     const file = await entry.getFile();
                                     if (!isNewOnly || file.lastModified > mostRecentShortcutTime) {
@@ -5439,21 +5444,19 @@
                     await findVideos(project.handle);
                     allVideoFiles.push(...projectVideoFiles);
 
-                    let editDirHandle;
+                    let editDirHandle = null;
                     try {
                         editDirHandle = await findDirectoryHandleByName(project.handle, 'Edit Thumbnails');
                     } catch (e) {
-                        loadErrors.push({ project: project.path, reason: "Missing 'Edit Thumbnails' folder" });
-                    }
-
-                    if (!editDirHandle) {
-                        continue;
+                        // Not critical if we just want to see the shortcuts
                     }
 
                     const landscapeFiles = [];
-                    for await (const entry of editDirHandle.values()) {
-                        if (entry.kind === 'file' && entry.name.match(/\.(jpe?g|png|gif|webp)$/i)) {
-                            landscapeFiles.push(await entry.getFile());
+                    if (editDirHandle) {
+                        for await (const entry of editDirHandle.values()) {
+                            if (entry.kind === 'file' && entry.name.match(/\.(jpe?g|png|gif|webp)$/i)) {
+                                landscapeFiles.push(await entry.getFile());
+                            }
                         }
                     }
 
@@ -5467,9 +5470,11 @@
                         return acc;
                     }, {});
 
-                    const videoFileMap = new Map(projectVideoFiles.map(f => [f.name.substring(0, f.name.lastIndexOf('.')), f]));
+                    const videoFileMap = new Map(projectVideoFiles.map(f => [f.name, f]));
                     
-                    let videoNames = Object.keys(groupedFiles);
+                    // Iterate over all video files, not just those with thumbnails
+                    let videoNames = Array.from(videoFileMap.keys());
+                    const isPlaylistRootMode = currentMode === 'playlist-root' || currentMode === 'update-playlist-root';
                     videoNames.sort((a, b) => {
                         if (sortBy === 'name-asc') return a.localeCompare(b);
                         if (sortBy === 'name-desc') return b.localeCompare(a);
@@ -5538,7 +5543,7 @@
                                     continue;
                                 }
                                 const effectiveDate = scDate || videoFile.lastModified;
-                                if (playlistCreationTime && effectiveDate <= (playlistCreationTime - 5000)) {
+                                if (playlistCreationTime && effectiveDate <= (playlistCreationTime - 60000)) {
                                     loadErrors.push({ project: project.path, video: videoFile.name, reason: "Shortcut date before playlist cutoff" });
                                     continue;
                                 }
@@ -5555,7 +5560,9 @@
                             continue;
                         }
 
-                        const files = groupedFiles[videoName].sort((a, b) => {
+                        const lastDotIndex = videoName.lastIndexOf('.');
+                        const videoBaseName = lastDotIndex !== -1 ? videoName.substring(0, lastDotIndex) : videoName;
+                        const files = (groupedFiles[videoBaseName] || []).sort((a, b) => {
                             const aNum = parseInt(a.name.substring(a.name.lastIndexOf('_') + 1));
                             const bNum = parseInt(b.name.substring(b.name.lastIndexOf('_') + 1));
                             return aNum - bNum;
@@ -5702,13 +5709,41 @@
                         canvasElements.push(rowDiv);
                         updateRowUI(rowDiv, videoFile.name, project.path);
 
+                        if (files.length === 0) {
+                            const placeholder = document.createElement('div');
+                            placeholder.className = 'thumbnail-wrapper';
+                            placeholder.style.width = '160px';
+                            placeholder.style.height = '90px';
+                            placeholder.style.backgroundColor = '#222';
+                            placeholder.style.display = 'inline-flex';
+                            placeholder.style.alignItems = 'center';
+                            placeholder.style.justifyContent = 'center';
+                            placeholder.style.borderRadius = '6px';
+                            placeholder.style.color = '#555';
+                            placeholder.style.fontSize = '12px';
+                            placeholder.textContent = 'No Thumbnails';
+
+                            if (initialShortcutType && (!isPlaylistRootMode || initialShortcutType === 'playlist-sc')) {
+                                placeholder.classList.add('selected-' + initialShortcutType);
+                            }
+
+                            placeholder.onclick = () => {
+                                const key = project.path + '|' + videoFile.name;
+                                const selection = shortcutSelections.get(key);
+                                const activeRotation = (selection && selection.rotation) ? selection.rotation : rotation;
+                                const activeFlipped = (selection && selection.flipped) ? selection.flipped : false;
+                                playVideo(videoFile, activeRotation, activeFlipped, rowDiv);
+                            };
+
+                            thumbnailsContainer.appendChild(placeholder);
+                        }
+
                         files.forEach(file => {
                             const wrapper = document.createElement('div');
                             wrapper.className = 'thumbnail-wrapper';
                             const img = new Image();
                             img.className = 'thumbnail';
                             img.dataset.fileName = file.name;
-                            const isPlaylistRootMode = currentMode === 'playlist-root' || currentMode === 'update-playlist-root';
                             if (initialShortcutType && (!isPlaylistRootMode || initialShortcutType === 'playlist-sc')) {
                                 img.classList.add('selected-' + initialShortcutType);
                                 wrapper.classList.add('selected-' + initialShortcutType);
