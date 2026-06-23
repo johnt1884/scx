@@ -5067,6 +5067,11 @@
             }
         }
 
+        function normalizeForMatching(s) {
+            if (!s) return "";
+            return s.toLowerCase().replace(/[^a-z0-9]/g, '');
+        }
+
         function getPotentialShortcutNames(videoName) {
             const names = new Set();
             if (!videoName) return [];
@@ -5079,7 +5084,7 @@
             const lowerBase = baseName.toLowerCase().trim();
 
             const suffixes = [".lnk", ".ink", " - shortcut.lnk", " - shortcut.ink", " - shortcut", ""];
-            const extensions = [".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v", ".mpg", ".mpeg", ""];
+            const extensions = [".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v", ".mpg", ".mpeg", ".3gp", ".ts", ".vob", ".ogv", ".ogg", ".asf", ""];
 
             // Try combinations with and without original extension, and with various shortcut suffixes
             [lowerName, lowerBase].forEach(name => {
@@ -5101,10 +5106,21 @@
         function checkShortcut(videoName, scDataSet) {
             const namesToCheck = getPotentialShortcutNames(videoName);
             if (scDataSet instanceof Set) {
-                return namesToCheck.some(n => scDataSet.has(n));
+                if (namesToCheck.some(n => scDataSet.has(n))) return true;
+                // Try fuzzy/normalized matching
+                const normTargets = [videoName, ...namesToCheck].map(normalizeForMatching);
+                for (const item of scDataSet) {
+                    const normItem = normalizeForMatching(item);
+                    if (normTargets.some(nt => normItem === nt || normItem.startsWith(nt) || nt.startsWith(normItem))) return true;
+                }
             } else if (scDataSet instanceof Map) {
                 for (const n of namesToCheck) {
                     if (scDataSet.has(n)) return scDataSet.get(n);
+                }
+                const normTargets = [videoName, ...namesToCheck].map(normalizeForMatching);
+                for (const [key, val] of scDataSet.entries()) {
+                    const normKey = normalizeForMatching(key);
+                    if (normTargets.some(nt => normKey === nt || normKey.startsWith(nt) || nt.startsWith(normKey))) return val;
                 }
             }
             return false;
@@ -5118,6 +5134,18 @@
                 if (d !== undefined && d !== null) {
                     if (latestDate === null || d > latestDate) {
                         latestDate = d;
+                    }
+                }
+            }
+            // Check fuzzy map if it exists (set up in renderVideosInternal)
+            if (window.fuzzyShortcutDates) {
+                const normTargets = [videoName, ...namesToCheck].map(normalizeForMatching);
+                for (const nt of normTargets) {
+                    const d = window.fuzzyShortcutDates.get(nt);
+                    if (d !== undefined && d !== null) {
+                        if (latestDate === null || d > latestDate) {
+                            latestDate = d;
+                        }
                     }
                 }
             }
@@ -5190,7 +5218,7 @@
                 // Treat as a project if it has video files directly, even if no Edit Thumbnails folder
                 if (!isProject && findProjects) {
                     for await (const entry of dirHandle.values()) {
-                        if (entry.kind === 'file' && entry.name.match(/\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|mpg|mpeg)$/i)) {
+                        if (entry.kind === 'file' && entry.name.match(/\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|mpg|mpeg|3gp|ts|vob|ogv|ogg|asf)$/i)) {
                             isProject = true;
                             break;
                         }
@@ -5286,31 +5314,26 @@
             }
 
             let rootShortcutDates = new Map();
+            window.fuzzyShortcutDates = new Map();
             if ((currentMode === 'update-playlist-root' || currentMode === 'playlist-root' || currentMode === 'root-sc') && g_rootHandle) {
                 try {
                     let scDir = null;
                     if (g_rootHandle.name.toLowerCase() === 'sc') {
                         scDir = g_rootHandle;
                     } else {
-                        // Try to find 'sc' folder case-insensitively (including subdirectories up to 1 level deep)
-                        for await (const entry of g_rootHandle.values()) {
-                            if (entry.kind === 'directory') {
-                                if (entry.name.toLowerCase() === 'sc') {
-                                    scDir = entry;
-                                    break;
+                        // Try to find 'sc' folder case-insensitively (including subdirectories up to 2 levels deep)
+                        async function findScRecursive(handle, depth) {
+                            if (depth > 2) return null;
+                            for await (const entry of handle.values()) {
+                                if (entry.kind === 'directory') {
+                                    if (entry.name.toLowerCase() === 'sc') return entry;
+                                    const found = await findScRecursive(entry, depth + 1);
+                                    if (found) return found;
                                 }
-                                // Check one level deep
-                                try {
-                                    for await (const subEntry of entry.values()) {
-                                        if (subEntry.kind === 'directory' && subEntry.name.toLowerCase() === 'sc') {
-                                            scDir = subEntry;
-                                            break;
-                                        }
-                                    }
-                                } catch (e) {}
-                                if (scDir) break;
                             }
+                            return null;
                         }
+                        scDir = await findScRecursive(g_rootHandle, 0);
                     }
 
                     if (scDir) {
@@ -5320,7 +5343,11 @@
                                 const name = entry.name.trim().toLowerCase();
                                 if (!name) continue;
                                 const current = rootShortcutDates.get(name) || 0;
-                                rootShortcutDates.set(name, Math.max(current, file.lastModified));
+                                const mtime = file.lastModified;
+                                rootShortcutDates.set(name, Math.max(current, mtime));
+
+                                const norm = normalizeForMatching(entry.name);
+                                window.fuzzyShortcutDates.set(norm, Math.max(window.fuzzyShortcutDates.get(norm) || 0, mtime));
                             } else if (entry.kind === 'directory') {
                                 // Recursively scan subfolders for shortcuts
                                 async function scanSubSc(dir, prefix = '') {
@@ -5330,7 +5357,11 @@
                                             const subName = subEntry.name.trim().toLowerCase();
                                             if (!subName) continue;
                                             const subCurrent = rootShortcutDates.get(subName) || 0;
-                                            rootShortcutDates.set(subName, Math.max(subCurrent, subFile.lastModified));
+                                            const subMtime = subFile.lastModified;
+                                            rootShortcutDates.set(subName, Math.max(subCurrent, subMtime));
+
+                                            const subNorm = normalizeForMatching(subEntry.name);
+                                            window.fuzzyShortcutDates.set(subNorm, Math.max(window.fuzzyShortcutDates.get(subNorm) || 0, subMtime));
                                         } else if (subEntry.kind === 'directory') {
                                             await scanSubSc(subEntry);
                                         }
@@ -5442,7 +5473,7 @@
                     // Recursively find videos in subfolders
                     async function findVideos(dirHandle, subfolder = '') {
                         for await (const entry of dirHandle.values()) {
-                            if (entry.kind === 'file' && entry.name.match(/\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|mpg|mpeg)$/i)) {
+                            if (entry.kind === 'file' && entry.name.match(/\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|mpg|mpeg|3gp|ts|vob|ogv|ogg|asf)$/i)) {
                                 try {
                                     const file = await entry.getFile();
                                     if (!isNewOnly || file.lastModified > mostRecentShortcutTime) {
@@ -5550,7 +5581,8 @@
                                     continue;
                                 }
                                 const effectiveDate = scDate || videoFile.lastModified;
-                                if (playlistCreationTime && effectiveDate <= (playlistCreationTime - 120000)) {
+                                // Using a large 12-hour buffer to handle delayed filesystem syncs or large batch operations
+                                if (playlistCreationTime && effectiveDate <= (playlistCreationTime - 43200000)) {
                                     loadErrors.push({ project: project.path, video: videoFile.name, reason: "Shortcut date before playlist cutoff" });
                                     continue;
                                 }
@@ -6657,7 +6689,7 @@
                 }
                 
                 const isShortcut = entry.toLowerCase().endsWith('.lnk') || entry.toLowerCase().endsWith('.ink') || entry.toLowerCase().endsWith(' - shortcut.lnk');
-                const isVideo = entry.toLowerCase().match(/\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|mpg|mpeg)$/i);
+                const isVideo = entry.toLowerCase().match(/\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|mpg|mpeg|3gp|ts|vob|ogv|ogg|asf)$/i);
 
                 if (isQuoted || (!isShortcut && !isVideo && !entry.includes('.') && entry.length > 0)) {
                     // It's a project name
