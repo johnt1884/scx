@@ -5089,10 +5089,11 @@
             let last;
             do {
                 last = n;
-                n = n.replace(/\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|mpg|mpeg|3gp|ts|vob|ogv|ogg|asf|lnk|ink)$/, '');
-                n = n.replace(/ - shortcut$/, '');
+                n = n.replace(/\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|mpg|mpeg|3gp|ts|vob|ogv|ogg|asf|lnk|ink)$/g, '');
+                n = n.replace(/ - shortcut$/g, '');
             } while (n !== last);
-            return n.replace(/[^a-z0-9]/g, '');
+            // Remove separators but preserve most characters
+            return n.replace(/[\s\-_._()[\]]/g, '');
         }
 
         function checkShortcut(videoName, scDataSet) {
@@ -5317,69 +5318,66 @@
             let rootShortcutDates = new Map(); // For update-playlist-root mode
             if (currentMode === 'update-playlist-root' && g_rootHandle) {
                 try {
-                    let scDir = null;
-                    if (g_rootHandle.name.toLowerCase() === 'sc') {
-                        scDir = g_rootHandle;
-                    } else {
-                        // Level 1
-                        for await (const entry of g_rootHandle.values()) {
-                            if (entry.kind === 'directory' && entry.name.toLowerCase() === 'sc') {
-                                scDir = entry; break;
-                            }
+                    const scDirs = new Set();
+                    async function findScDirs(handle, depth = 0) {
+                        if (depth > 5) return;
+
+                        const lowName = handle.name.toLowerCase();
+                        if (lowName === 'sc') {
+                            scDirs.add(handle);
                         }
-                        // Level 2
-                        if (!scDir) {
-                            for await (const entry of g_rootHandle.values()) {
-                                if (entry.kind === 'directory' && !skipDirs.has(entry.name.toLowerCase())) {
-                                    for await (const subEntry of entry.values()) {
-                                        if (subEntry.kind === 'directory' && subEntry.name.toLowerCase() === 'sc') {
-                                            scDir = subEntry; break;
-                                        }
-                                    }
-                                    if (scDir) break;
+
+                        // Also check if the directory contains any shortcuts at top level
+                        // This helps if the picked directory IS the sc directory but has a different name
+                        if (depth === 0) {
+                            for await (const entry of handle.values()) {
+                                if (entry.kind === 'file' && (entry.name.toLowerCase().endsWith('.lnk') || entry.name.toLowerCase().endsWith('.ink'))) {
+                                    console.log("Heuristically identified root as a shortcuts directory.");
+                                    scDirs.add(handle);
+                                    break;
                                 }
                             }
                         }
-                        // Level 3
-                        if (!scDir) {
-                            for await (const entry of g_rootHandle.values()) {
-                                if (entry.kind === 'directory' && !skipDirs.has(entry.name.toLowerCase())) {
-                                    for await (const subEntry of entry.values()) {
-                                        if (subEntry.kind === 'directory' && !skipDirs.has(subEntry.name.toLowerCase())) {
-                                            for await (const subSubEntry of subEntry.values()) {
-                                                if (subSubEntry.kind === 'directory' && subSubEntry.name.toLowerCase() === 'sc') {
-                                                    scDir = subSubEntry; break;
-                                                }
-                                            }
-                                        }
-                                        if (scDir) break;
-                                    }
+
+                        for await (const entry of handle.values()) {
+                            if (entry.kind === 'directory') {
+                                if (!['.git', 'node_modules', '$recycle.bin', 'system volume information', 'originals', 'thumbnails', 'edit thumbnails'].includes(entry.name.toLowerCase())) {
+                                    await findScDirs(entry, depth + 1);
                                 }
-                                if (scDir) break;
                             }
                         }
                     }
+                    console.log("Searching for 'sc' directories from root (up to 5 levels deep)...");
+                    await findScDirs(g_rootHandle);
 
-                    if (scDir) {
+                    if (scDirs.size > 0) {
+                        console.log(`Discovered ${scDirs.size} 'sc' directories.`);
                         async function scanScRecursive(dir) {
+                            let count = 0;
                             for await (const entry of dir.values()) {
                                 if (entry.kind === 'file') {
                                     const file = await entry.getFile();
                                     const lowName = entry.name.toLowerCase();
                                     const existing = rootShortcutDates.get(lowName) || 0;
                                     rootShortcutDates.set(lowName, Math.max(existing, file.lastModified));
+                                    count++;
                                 } else if (entry.kind === 'directory') {
-                                    await scanScRecursive(entry);
+                                    count += await scanScRecursive(entry);
                                 }
                             }
+                            return count;
                         }
-                        await scanScRecursive(scDir);
+                        for (const dir of scDirs) {
+                            const found = await scanScRecursive(dir);
+                            console.log(`Scanned shortcuts directory '${dir.name}': found ${found} files.`);
+                        }
                         console.log(`Loaded ${rootShortcutDates.size} shortcut dates for filtering (recursive).`);
                     } else {
-                        console.warn("'sc' directory not found in the selected root (checked 3 levels deep).");
+                        console.warn("No 'sc' directories found in the selected root (checked 5 levels deep).");
+                        alert("No 'sc' directory found. Please ensure you selected the correct root directory containing the 'sc' folder.");
                     }
                 } catch (e) {
-                    console.warn("Could not read sc directory for dates:", e);
+                    console.warn("Could not read sc directories for dates:", e);
                 }
             }
 
@@ -5587,9 +5585,14 @@
                                     loadErrors.push({ project: project.path, video: videoFile.name, reason: "No physical shortcut file found in sc/ directory (required for date check)" });
                                     continue;
                                 }
-                                const buffer = 24 * 60 * 60 * 1000;
-                                if (playlistCreationTime && scDate <= (playlistCreationTime - buffer)) {
-                                    loadErrors.push({ project: project.path, video: videoFile.name, reason: `Shortcut file date (${new Date(scDate).toLocaleString()}) is older than playlist cutoff (${new Date(playlistCreationTime).toLocaleString()}) minus 24h buffer` });
+                                // Strictly newer check: scDate must be >= playlistCreationTime.
+                                // Identical timestamps are allowed to handle low-resolution filesystems.
+                                // 10-second buffer added for near-simultaneous saves.
+                                const buffer = 10000;
+                                if (playlistCreationTime && scDate < (playlistCreationTime - buffer)) {
+                                    const scStr = new Date(scDate).toLocaleString() + '.' + (scDate % 1000);
+                                    const plStr = new Date(playlistCreationTime).toLocaleString() + '.' + (playlistCreationTime % 1000);
+                                    loadErrors.push({ project: project.path, video: videoFile.name, reason: `Shortcut file date (${scStr}) is older than playlist cutoff (${plStr}) minus 10s buffer` });
                                     continue;
                                 }
                             } else if (hasAnyShortcuts) {
@@ -5674,6 +5677,7 @@
                             table.innerHTML = `
                                 <thead>
                                     <tr style="border-bottom: 2px solid #ddd; text-align: left;">
+                                        <th style="padding: 8px;">Project</th>
                                         <th style="padding: 8px;">Video Name</th>
                                         <th style="padding: 8px;">Status</th>
                                         <th style="padding: 8px;">Reason</th>
@@ -5707,22 +5711,46 @@
 
                                 if (scDate === null) {
                                     status = 'Hidden';
-                                    reason = 'No physical shortcut file found in sc/ directory';
+                                    reason = 'No physical shortcut file found in sc/ directory (checked recursively)';
                                 } else {
-                                    const buffer = 24 * 60 * 60 * 1000;
-                                    if (playlistCreationTime && scDate <= (playlistCreationTime - buffer)) {
+                                    const buffer = 10000;
+                                    const scStr = new Date(scDate).toLocaleString() + '.' + (scDate % 1000);
+                                    const plStr = new Date(playlistCreationTime).toLocaleString() + '.' + (playlistCreationTime % 1000);
+                                    if (playlistCreationTime && scDate < (playlistCreationTime - buffer)) {
                                         status = 'Hidden';
-                                        reason = `Shortcut file date (${new Date(scDate).toLocaleString()}) is older than playlist cutoff (${new Date(playlistCreationTime).toLocaleString()}) minus 24h buffer`;
+                                        reason = `Shortcut date (${scStr}) is older than playlist cutoff (${plStr}) minus 10s buffer`;
+                                    } else {
+                                        status = 'Shown';
+                                        reason = `Shortcut date (${scStr}) is newer than or equal to playlist cutoff (${plStr}) minus 10s buffer`;
                                     }
                                 }
 
                                 const tr = document.createElement('tr');
                                 tr.style.borderBottom = '1px solid #eee';
-                                tr.innerHTML = `
-                                    <td style="padding: 8px;">${videoFile.name}</td>
-                                    <td style="padding: 8px; color: ${status === 'Shown' ? 'green' : 'red'}; font-weight: bold;">${status}</td>
-                                    <td style="padding: 8px; font-size: 0.9em;">${reason}</td>
-                                `;
+
+                                const projectTd = document.createElement('td');
+                                projectTd.style.padding = '8px';
+                                projectTd.textContent = project.name;
+
+                                const nameTd = document.createElement('td');
+                                nameTd.style.padding = '8px';
+                                nameTd.textContent = videoFile.name;
+
+                                const statusTd = document.createElement('td');
+                                statusTd.style.padding = '8px';
+                                statusTd.style.color = status === 'Shown' ? 'green' : 'red';
+                                statusTd.style.fontWeight = 'bold';
+                                statusTd.textContent = status;
+
+                                const reasonTd = document.createElement('td');
+                                reasonTd.style.padding = '8px';
+                                reasonTd.style.fontSize = '0.9em';
+                                reasonTd.textContent = reason;
+
+                                tr.appendChild(projectTd);
+                                tr.appendChild(nameTd);
+                                tr.appendChild(statusTd);
+                                tr.appendChild(reasonTd);
                                 tbody.appendChild(tr);
                             });
 
