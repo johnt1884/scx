@@ -5477,7 +5477,7 @@
                     // Recursively find videos in subfolders
                     async function findVideos(dirHandle, subfolder = '') {
                         for await (const entry of dirHandle.values()) {
-                            if (entry.kind === 'file' && entry.name.match(/\.(mp4|avi|mov|mkv)$/i)) {
+                            if (entry.kind === 'file' && entry.name.match(/\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|mpg|mpeg|3gp|ts|vob|ogv|ogg|asf)$/i)) {
                                 try {
                                     const file = await entry.getFile();
                                     if (!isNewOnly || file.lastModified > mostRecentShortcutTime) {
@@ -5587,8 +5587,9 @@
                                     loadErrors.push({ project: project.path, video: videoFile.name, reason: "No physical shortcut file found in sc/ directory (required for date check)" });
                                     continue;
                                 }
-                                if (playlistCreationTime && scDate <= playlistCreationTime) {
-                                    loadErrors.push({ project: project.path, video: videoFile.name, reason: `Shortcut file date (${new Date(scDate).toLocaleString()}) is not newer than playlist cutoff (${new Date(playlistCreationTime).toLocaleString()})` });
+                                const buffer = 24 * 60 * 60 * 1000;
+                                if (playlistCreationTime && scDate <= (playlistCreationTime - buffer)) {
+                                    loadErrors.push({ project: project.path, video: videoFile.name, reason: `Shortcut file date (${new Date(scDate).toLocaleString()}) is older than playlist cutoff (${new Date(playlistCreationTime).toLocaleString()}) minus 24h buffer` });
                                     continue;
                                 }
                             } else if (hasAnyShortcuts) {
@@ -5708,9 +5709,10 @@
                                     status = 'Hidden';
                                     reason = 'No physical shortcut file found in sc/ directory';
                                 } else {
-                                    if (playlistCreationTime && scDate <= playlistCreationTime) {
+                                    const buffer = 24 * 60 * 60 * 1000;
+                                    if (playlistCreationTime && scDate <= (playlistCreationTime - buffer)) {
                                         status = 'Hidden';
-                                        reason = `Shortcut file date (${new Date(scDate).toLocaleString()}) is not newer than playlist cutoff (${new Date(playlistCreationTime).toLocaleString()})`;
+                                        reason = `Shortcut file date (${new Date(scDate).toLocaleString()}) is older than playlist cutoff (${new Date(playlistCreationTime).toLocaleString()}) minus 24h buffer`;
                                     }
                                 }
 
