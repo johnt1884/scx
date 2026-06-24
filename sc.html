@@ -5227,6 +5227,16 @@
                     isProject = true;
                 } catch (e) {}
 
+                if (!isProject) {
+                    // Fallback: check if the folder contains any video files directly
+                    for await (const entry of dirHandle.values()) {
+                        if (entry.kind === 'file' && entry.name.match(/\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|mpg|mpeg|3gp|ts|vob|ogv|ogg|asf)$/i)) {
+                            isProject = true;
+                            break;
+                        }
+                    }
+                }
+
                 const folderInfo = {
                     handle: dirHandle,
                     path: currentPath,
@@ -5587,12 +5597,12 @@
                                 }
                                 // Strictly newer check: scDate must be >= playlistCreationTime.
                                 // Identical timestamps are allowed to handle low-resolution filesystems.
-                                // 10-second buffer added for near-simultaneous saves.
-                                const buffer = 10000;
+                                // 1-second buffer added for filesystem precision.
+                                const buffer = 1000;
                                 if (playlistCreationTime && scDate < (playlistCreationTime - buffer)) {
                                     const scStr = new Date(scDate).toLocaleString() + '.' + (scDate % 1000);
                                     const plStr = new Date(playlistCreationTime).toLocaleString() + '.' + (playlistCreationTime % 1000);
-                                    loadErrors.push({ project: project.path, video: videoFile.name, reason: `Shortcut file date (${scStr}) is older than playlist cutoff (${plStr}) minus 10s buffer` });
+                                    loadErrors.push({ project: project.path, video: videoFile.name, reason: `Shortcut file date (${scStr}) is older than playlist cutoff (${plStr})` });
                                     continue;
                                 }
                             } else if (hasAnyShortcuts) {
@@ -5713,15 +5723,15 @@
                                     status = 'Hidden';
                                     reason = 'No physical shortcut file found in sc/ directory (checked recursively)';
                                 } else {
-                                    const buffer = 10000;
+                                    const buffer = 1000;
                                     const scStr = new Date(scDate).toLocaleString() + '.' + (scDate % 1000);
                                     const plStr = new Date(playlistCreationTime).toLocaleString() + '.' + (playlistCreationTime % 1000);
                                     if (playlistCreationTime && scDate < (playlistCreationTime - buffer)) {
                                         status = 'Hidden';
-                                        reason = `Shortcut date (${scStr}) is older than playlist cutoff (${plStr}) minus 10s buffer`;
+                                        reason = `Shortcut date (${scStr}) is older than playlist cutoff (${plStr})`;
                                     } else {
                                         status = 'Shown';
-                                        reason = `Shortcut date (${scStr}) is newer than or equal to playlist cutoff (${plStr}) minus 10s buffer`;
+                                        reason = `Shortcut date (${scStr}) is newer than or equal to playlist cutoff (${plStr})`;
                                     }
                                 }
 
@@ -5773,7 +5783,7 @@
                     }
                     canvasElements.push(groupHeader);
 
-                    if (projectRows.length === 0) {
+                    if (projectRows.length === 0 && currentMode !== 'update-playlist-root') {
                         continue;
                     }
 
@@ -5922,7 +5932,7 @@
                             });
                         }
                     }
-                    if (projectRows.length > 0) {
+                    if (projectRows.length > 0 || currentMode === 'update-playlist-root') {
                         const hr = document.createElement('hr');
                         canvasElements.push(hr);
                         canvases.set(canvasId, { id: canvasId, name: project.name, elements: canvasElements, path: project.path });
