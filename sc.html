@@ -5583,13 +5583,12 @@
                                     continue;
                                 }
                             } else if (currentMode === 'update-playlist-root') {
-                                if (!hasRootSc) {
-                                    loadErrors.push({ project: project.path, video: videoFile.name, reason: "No root shortcut found (Update Playlist Mode)" });
+                                if (scDate === null) {
+                                    loadErrors.push({ project: project.path, video: videoFile.name, reason: "No physical shortcut file found in sc/ directory (required for date check)" });
                                     continue;
                                 }
-                                const effectiveDate = scDate || videoFile.lastModified;
-                                if (playlistCreationTime && effectiveDate <= playlistCreationTime) {
-                                    loadErrors.push({ project: project.path, video: videoFile.name, reason: `Shortcut date (${new Date(effectiveDate).toLocaleString()}) is not newer than playlist cutoff (${new Date(playlistCreationTime).toLocaleString()})` });
+                                if (playlistCreationTime && scDate <= playlistCreationTime) {
+                                    loadErrors.push({ project: project.path, video: videoFile.name, reason: `Shortcut file date (${new Date(scDate).toLocaleString()}) is not newer than playlist cutoff (${new Date(playlistCreationTime).toLocaleString()})` });
                                     continue;
                                 }
                             } else if (hasAnyShortcuts) {
@@ -5703,18 +5702,15 @@
                                     if (globalRootScSet) rootScEntry = checkShortcut(videoFile.name, globalRootScSet);
                                 }
 
-                                let hasRootSc = rootScEntry !== false;
                                 let scDate = getShortcutDate(videoFile.name, rootShortcutDates);
-                                if (scDate !== null) hasRootSc = true;
 
-                                if (!hasRootSc) {
+                                if (scDate === null) {
                                     status = 'Hidden';
-                                    reason = 'No root shortcut found';
+                                    reason = 'No physical shortcut file found in sc/ directory';
                                 } else {
-                                    const effectiveDate = scDate || videoFile.lastModified;
-                                    if (playlistCreationTime && effectiveDate <= playlistCreationTime) {
+                                    if (playlistCreationTime && scDate <= playlistCreationTime) {
                                         status = 'Hidden';
-                                        reason = `Shortcut date (${new Date(effectiveDate).toLocaleString()}) is not newer than playlist cutoff (${new Date(playlistCreationTime).toLocaleString()})`;
+                                        reason = `Shortcut file date (${new Date(scDate).toLocaleString()}) is not newer than playlist cutoff (${new Date(playlistCreationTime).toLocaleString()})`;
                                     }
                                 }
 
