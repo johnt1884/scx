@@ -382,6 +382,88 @@ def update_shortcut(path, new_target):
         print(f"Error updating shortcut {path}: {e}")
     return False
 
+def update_root_misc_shortcuts(base_path, targets_map, verbose=False):
+    misc_path = os.path.join(base_path, 'misc.txt')
+    existing_data = {}
+    if os.path.exists(misc_path):
+        try:
+            with open(misc_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line: continue
+                    parts = line.split('|')
+                    if parts:
+                        existing_data[parts[0]] = parts[1:]
+        except Exception as e:
+            if verbose: print(f"Error reading misc.txt: {e}")
+
+    current_shortcut_names = set()
+    for lnk_full_path, target in targets_map.items():
+        shortcut_name = os.path.basename(lnk_full_path)
+        current_shortcut_names.add(shortcut_name)
+
+        try:
+            mtime = os.path.getmtime(lnk_full_path)
+            dt = datetime.fromtimestamp(mtime, timezone.utc).replace(tzinfo=None)
+            iso_mtime = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+
+            # Determine project folder and video name
+            try:
+                rel_to_base = os.path.relpath(target, base_path)
+                if not rel_to_base.startswith('..'):
+                    path_parts = rel_to_base.split(os.sep)
+                    project_folder = path_parts[0]
+                else:
+                    project_folder = os.path.basename(os.path.dirname(target))
+            except Exception:
+                project_folder = os.path.basename(os.path.dirname(target))
+
+            video_name = os.path.basename(target)
+
+            sc_project = f"sc_project:{project_folder}"
+            sc_video = f"sc_video:{video_name}"
+            sc_mtime = f"sc_mtime:{iso_mtime}"
+
+            if shortcut_name not in existing_data:
+                existing_data[shortcut_name] = []
+
+            # Filter out old shortcut-related parts
+            new_parts = [p for p in existing_data[shortcut_name]
+                         if not (p.startswith('sc_project:') or
+                                 p.startswith('sc_video:') or
+                                 p.startswith('sc_mtime:'))]
+            new_parts.extend([sc_project, sc_video, sc_mtime])
+            existing_data[shortcut_name] = new_parts
+        except Exception as e:
+            if verbose: print(f"Error processing shortcut {shortcut_name}: {e}")
+
+    # Cleanup: remove shortcut data for shortcuts that no longer exist in the root sc folder
+    keys_to_delete = []
+    for key in list(existing_data.keys()):
+        has_sc_data = any(p.startswith('sc_project:') for p in existing_data[key])
+        if has_sc_data and key not in current_shortcut_names:
+            existing_data[key] = [p for p in existing_data[key]
+                                 if not (p.startswith('sc_project:') or
+                                         p.startswith('sc_video:') or
+                                         p.startswith('sc_mtime:'))]
+            if not existing_data[key]:
+                keys_to_delete.append(key)
+
+    for key in keys_to_delete:
+        del existing_data[key]
+
+    if existing_data:
+        if verbose:
+            print(f"  - root: updating misc.txt with {len(current_shortcut_names)} shortcuts")
+        with open(misc_path, 'w', encoding='utf-8') as f:
+            for key in sorted(existing_data.keys()):
+                line_parts = [key] + existing_data[key]
+                f.write('|'.join(line_parts) + '\n')
+    elif os.path.exists(misc_path):
+        try:
+            os.remove(misc_path)
+        except Exception: pass
+
 def update_sc_date(verbose=False):
     print("\nUpdating scdate.txt files...")
     base_path = os.path.abspath(os.getcwd())
@@ -507,8 +589,9 @@ def update_sc_data(verbose=False):
     if os.path.exists(root_sc):
         groups = {}
         lnk_paths = [os.path.join(root_sc, f) for f in os.listdir(root_sc) if f.lower().endswith('.lnk')]
+        targets_map = get_shortcut_targets_bulk(lnk_paths)
+        update_root_misc_shortcuts(base_path, targets_map, verbose=verbose)
         if lnk_paths:
-            targets_map = get_shortcut_targets_bulk(lnk_paths)
             for f_name in sorted(os.listdir(root_sc)):
                 p = os.path.join(root_sc, f_name)
                 t = targets_map.get(p)
