@@ -1221,6 +1221,7 @@
         let editorCropResizing = null;
         let editorCropStartPos = { x: 0, y: 0 };
         let editorCropBoxStart = { x: 0, y: 0, w: 0, h: 0 };
+        let lastUsedCropBox = null; // { wPct, hPct, xPct, yPct }
 
         let videoCategories = new Map(); // Key: projectPath + '|' + videoName, Value: Set of category names
         let editModeRotatedVideos = new Map(); // Key: projectPath + '|' + videoName, Value: true
@@ -2041,6 +2042,12 @@
                                     editorCropBox.style.top = (rect.y + (parts[3] / rect.vH * rect.h)) + 'px';
                                 }
                                 editorPendingCrop = editorCurrentCrop;
+                            } else if (lastUsedCropBox) {
+                                editorCropBox.style.width = (rect.w * lastUsedCropBox.wPct) + 'px';
+                                editorCropBox.style.height = (rect.h * lastUsedCropBox.hPct) + 'px';
+                                editorCropBox.style.left = (rect.x + rect.w * lastUsedCropBox.xPct) + 'px';
+                                editorCropBox.style.top = (rect.y + rect.h * lastUsedCropBox.yPct) + 'px';
+                                updateCropStringFromBox();
                             } else {
                                 // Default to 80% of video size
                                 editorCropBox.style.width = (rect.w * 0.8) + 'px';
@@ -2057,6 +2064,21 @@
             editorCropConfirm.onclick = (e) => {
                 e.stopPropagation();
                 editorCurrentCrop = editorPendingCrop;
+                if (editorCurrentCrop) {
+                    const rect = getActualVideoRect();
+                    if (rect) {
+                        const bX = parseFloat(editorCropBox.style.left);
+                        const bY = parseFloat(editorCropBox.style.top);
+                        const bW = parseFloat(editorCropBox.style.width);
+                        const bH = parseFloat(editorCropBox.style.height);
+                        lastUsedCropBox = {
+                            wPct: bW / rect.w,
+                            hPct: bH / rect.h,
+                            xPct: (bX - rect.x) / rect.w,
+                            yPct: (bY - rect.y) / rect.h
+                        };
+                    }
+                }
                 editorCropBox.style.display = 'none';
                 editorCropBtn.classList.add('active');
                 editorCropBtn.style.backgroundColor = 'rgba(67, 160, 71, 0.3)';
@@ -4290,6 +4312,10 @@
                 '                        Move-Item -LiteralPath \$file.FullName -Destination $primaryPath -Force',
                 '                        Write-Host "Standardized shortcut name: $primaryPath" -ForegroundColor Gray',
                 '                    }',
+                '                    # Always re-save to ensure it is not broken after edits',
+                '                    \$sc = \$wshell.CreateShortcut($primaryPath)',
+                '                    \$sc.TargetPath = \$targetPath',
+                '                    \$sc.Save()',
                 '                    \$foundCorrect = \$true',
                 '                } else {',
                 '                    Write-Host "Recycling duplicate shortcut: \$(\$file.FullName)" -ForegroundColor Gray',
@@ -5160,8 +5186,13 @@
 
             const projectFolders = [];
             const allDiscoveredFolders = [];
+            let folderScanCount = 0;
 
             async function scanFolders(dirHandle, currentPath = '', findProjects = true, insideProject = false) {
+                folderScanCount++;
+                if (folderScanCount % 100 === 0) {
+                    await new Promise(r => setTimeout(r, 0));
+                }
                 let isProject = false;
                 try {
                     await findDirectoryHandleByName(dirHandle, 'Edit Thumbnails');
@@ -5259,32 +5290,53 @@
             let rootShortcutDates = new Map(); // For update-playlist-root mode
             if (currentMode === 'update-playlist-root' && g_rootHandle) {
                 try {
-                    let scDir = null;
-                    if (g_rootHandle.name.toLowerCase() === 'sc') {
-                        scDir = g_rootHandle;
-                    } else {
-                        // Try to find 'sc' folder case-insensitively
-                        for await (const entry of g_rootHandle.values()) {
-                            if (entry.kind === 'directory' && entry.name.toLowerCase() === 'sc') {
-                                scDir = entry;
-                                break;
+                    const miscHandle = await g_rootHandle.getFileHandle('misc.txt');
+                    const file = await miscHandle.getFile();
+                    const text = await file.text();
+                    text.split('\n').forEach(line => {
+                        const parts = line.trim().split('|');
+                        if (parts.length >= 2) {
+                            const scName = parts[0].toLowerCase();
+                            parts.slice(1).forEach(part => {
+                                if (part.startsWith('sc_mtime:')) {
+                                    const mtimeStr = part.substring(9).trim();
+                                    const mtime = new Date(mtimeStr).getTime();
+                                    if (!isNaN(mtime)) {
+                                        rootShortcutDates.set(scName, mtime);
+                                    }
+                                }
+                            });
+                        }
+                    });
+                    console.log(`Loaded ${rootShortcutDates.size} shortcut dates from root misc.txt.`);
+                } catch (e) {
+                    console.warn("Could not read root misc.txt for shortcut dates, falling back to sc/ directory scan:", e);
+                    try {
+                        let scDir = null;
+                        if (g_rootHandle.name.toLowerCase() === 'sc') {
+                            scDir = g_rootHandle;
+                        } else {
+                            // Try to find 'sc' folder case-insensitively
+                            for await (const entry of g_rootHandle.values()) {
+                                if (entry.kind === 'directory' && entry.name.toLowerCase() === 'sc') {
+                                    scDir = entry;
+                                    break;
+                                }
                             }
                         }
-                    }
 
-                    if (scDir) {
-                        for await (const entry of scDir.values()) {
-                        if (entry.kind === 'file') {
-                            const file = await entry.getFile();
-                            rootShortcutDates.set(entry.name.toLowerCase(), file.lastModified);
+                        if (scDir) {
+                            for await (const entry of scDir.values()) {
+                                if (entry.kind === 'file') {
+                                    const file = await entry.getFile();
+                                    rootShortcutDates.set(entry.name.toLowerCase(), file.lastModified);
+                                }
+                            }
+                            console.log(`Loaded ${rootShortcutDates.size} shortcut dates from sc/ directory scan.`);
                         }
+                    } catch (e2) {
+                        console.warn("Fallback sc/ directory scan failed:", e2);
                     }
-                        console.log(`Loaded ${rootShortcutDates.size} shortcut dates for filtering.`);
-                    } else {
-                        console.warn("'sc' directory not found in the selected root.");
-                    }
-                } catch (e) {
-                    console.warn("Could not read sc directory for dates:", e);
                 }
             }
 
@@ -5305,7 +5357,12 @@
             allProjectFolders = [...allDiscoveredFolders];
             if (g_rootHandle && g_rootHandle !== currentDirHandle) {
                 const rootDiscoveredFolders = [];
+                let rootFolderScanCount = 0;
                 async function scanRootFolders(dirHandle, currentPath = '', findProjects = true, insideProject = false) {
+                    rootFolderScanCount++;
+                    if (rootFolderScanCount % 100 === 0) {
+                        await new Promise(r => setTimeout(r, 0));
+                    }
                     let isProject = false;
                     try {
                         await findDirectoryHandleByName(dirHandle, 'Edit Thumbnails');
@@ -5500,8 +5557,12 @@
                                     loadErrors.push({ project: project.path, video: videoFile.name, reason: "No root shortcut found (Update Playlist Mode)" });
                                     continue;
                                 }
-                                const effectiveDate = scDate || videoFile.lastModified;
-                                if (playlistCreationTime && effectiveDate <= (playlistCreationTime + 1000)) {
+                                const effectiveDate = scDate;
+                                if (!effectiveDate) {
+                                    loadErrors.push({ project: project.path, video: videoFile.name, reason: "No shortcut date found for update-playlist-root" });
+                                    continue;
+                                }
+                                if (playlistCreationTime && effectiveDate <= playlistCreationTime) {
                                     loadErrors.push({ project: project.path, video: videoFile.name, reason: "Shortcut date before playlist cutoff" });
                                     continue;
                                 }
@@ -5978,8 +6039,13 @@
 
             const projectFolders = [];
             const allDiscoveredFolders = [];
+            let folderScanCount = 0;
 
             async function scanFolders(dirHandle, currentPath = '', findProjects = true, insideProject = false) {
+                folderScanCount++;
+                if (folderScanCount % 100 === 0) {
+                    await new Promise(r => setTimeout(r, 0));
+                }
                 let isProject = false;
                 try {
                     await findDirectoryHandleByName(dirHandle, 'Edit Thumbnails');
@@ -6021,7 +6087,12 @@
 
             if (g_rootHandle) {
                 const rootDiscoveredFolders = [];
+                let rootFolderScanCount = 0;
                 async function scanRootFolders(dirHandle, currentPath = '', findProjects = true, insideProject = false) {
+                    rootFolderScanCount++;
+                    if (rootFolderScanCount % 100 === 0) {
+                        await new Promise(r => setTimeout(r, 0));
+                    }
                     let isProject = false;
                     try {
                         await findDirectoryHandleByName(dirHandle, 'Edit Thumbnails');
