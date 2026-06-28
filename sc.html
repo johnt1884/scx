@@ -1221,6 +1221,7 @@
         let editorCropResizing = null;
         let editorCropStartPos = { x: 0, y: 0 };
         let editorCropBoxStart = { x: 0, y: 0, w: 0, h: 0 };
+        let lastUsedCropBox = null; // { wPct, hPct, xPct, yPct }
 
         let videoCategories = new Map(); // Key: projectPath + '|' + videoName, Value: Set of category names
         let editModeRotatedVideos = new Map(); // Key: projectPath + '|' + videoName, Value: true
@@ -2041,6 +2042,12 @@
                                     editorCropBox.style.top = (rect.y + (parts[3] / rect.vH * rect.h)) + 'px';
                                 }
                                 editorPendingCrop = editorCurrentCrop;
+                            } else if (lastUsedCropBox) {
+                                editorCropBox.style.width = (rect.w * lastUsedCropBox.wPct) + 'px';
+                                editorCropBox.style.height = (rect.h * lastUsedCropBox.hPct) + 'px';
+                                editorCropBox.style.left = (rect.x + rect.w * lastUsedCropBox.xPct) + 'px';
+                                editorCropBox.style.top = (rect.y + rect.h * lastUsedCropBox.yPct) + 'px';
+                                updateCropStringFromBox();
                             } else {
                                 // Default to 80% of video size
                                 editorCropBox.style.width = (rect.w * 0.8) + 'px';
@@ -2057,6 +2064,21 @@
             editorCropConfirm.onclick = (e) => {
                 e.stopPropagation();
                 editorCurrentCrop = editorPendingCrop;
+                if (editorCurrentCrop) {
+                    const rect = getActualVideoRect();
+                    if (rect) {
+                        const bX = parseFloat(editorCropBox.style.left);
+                        const bY = parseFloat(editorCropBox.style.top);
+                        const bW = parseFloat(editorCropBox.style.width);
+                        const bH = parseFloat(editorCropBox.style.height);
+                        lastUsedCropBox = {
+                            wPct: bW / rect.w,
+                            hPct: bH / rect.h,
+                            xPct: (bX - rect.x) / rect.w,
+                            yPct: (bY - rect.y) / rect.h
+                        };
+                    }
+                }
                 editorCropBox.style.display = 'none';
                 editorCropBtn.classList.add('active');
                 editorCropBtn.style.backgroundColor = 'rgba(67, 160, 71, 0.3)';
@@ -4290,6 +4312,10 @@
                 '                        Move-Item -LiteralPath \$file.FullName -Destination $primaryPath -Force',
                 '                        Write-Host "Standardized shortcut name: $primaryPath" -ForegroundColor Gray',
                 '                    }',
+                '                    # Always re-save to ensure it is not broken after edits',
+                '                    \$sc = \$wshell.CreateShortcut($primaryPath)',
+                '                    \$sc.TargetPath = \$targetPath',
+                '                    \$sc.Save()',
                 '                    \$foundCorrect = \$true',
                 '                } else {',
                 '                    Write-Host "Recycling duplicate shortcut: \$(\$file.FullName)" -ForegroundColor Gray',
@@ -5160,8 +5186,13 @@
 
             const projectFolders = [];
             const allDiscoveredFolders = [];
+            let folderScanCount = 0;
 
             async function scanFolders(dirHandle, currentPath = '', findProjects = true, insideProject = false) {
+                folderScanCount++;
+                if (folderScanCount % 100 === 0) {
+                    await new Promise(r => setTimeout(r, 0));
+                }
                 let isProject = false;
                 try {
                     await findDirectoryHandleByName(dirHandle, 'Edit Thumbnails');
@@ -5326,7 +5357,12 @@
             allProjectFolders = [...allDiscoveredFolders];
             if (g_rootHandle && g_rootHandle !== currentDirHandle) {
                 const rootDiscoveredFolders = [];
+                let rootFolderScanCount = 0;
                 async function scanRootFolders(dirHandle, currentPath = '', findProjects = true, insideProject = false) {
+                    rootFolderScanCount++;
+                    if (rootFolderScanCount % 100 === 0) {
+                        await new Promise(r => setTimeout(r, 0));
+                    }
                     let isProject = false;
                     try {
                         await findDirectoryHandleByName(dirHandle, 'Edit Thumbnails');
@@ -6003,8 +6039,13 @@
 
             const projectFolders = [];
             const allDiscoveredFolders = [];
+            let folderScanCount = 0;
 
             async function scanFolders(dirHandle, currentPath = '', findProjects = true, insideProject = false) {
+                folderScanCount++;
+                if (folderScanCount % 100 === 0) {
+                    await new Promise(r => setTimeout(r, 0));
+                }
                 let isProject = false;
                 try {
                     await findDirectoryHandleByName(dirHandle, 'Edit Thumbnails');
@@ -6046,7 +6087,12 @@
 
             if (g_rootHandle) {
                 const rootDiscoveredFolders = [];
+                let rootFolderScanCount = 0;
                 async function scanRootFolders(dirHandle, currentPath = '', findProjects = true, insideProject = false) {
+                    rootFolderScanCount++;
+                    if (rootFolderScanCount % 100 === 0) {
+                        await new Promise(r => setTimeout(r, 0));
+                    }
                     let isProject = false;
                     try {
                         await findDirectoryHandleByName(dirHandle, 'Edit Thumbnails');
